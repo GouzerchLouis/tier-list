@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tier List</title>
+
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 16px;
+    background: #1a1a1a;
+    color: #eee;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  .page { max-width: 1000px; margin: 0 auto; }
+
+  h1 { text-align: center; font-size: 28px; letter-spacing: 1px; margin: 8px 0 16px; }
+  h2 { font-size: 15px; letter-spacing: 1px; color: #bbb; margin: 0 0 8px; }
+  section { margin-top: 24px; }
+
+  /* ---------- Messages (erreurs / avertissements) ---------- */
+  #message { padding: 10px 14px; margin-bottom: 16px; border: 1px solid; font-size: 14px; }
+  #message.error   { background: #4a1f1f; border-color: #a33; }
+  #message.warning { background: #4a3f1a; border-color: #a80; }
+  #message-text { margin: 0; white-space: pre-line; }
+  #message-help { margin-top: 10px; }
+  #message-help p { margin: 6px 0; }
+  code { background: #000; padding: 1px 5px; }
+
+  /* ---------- Tiers ---------- */
+  #tiers { border: 2px solid #000; }
+  .tier { display: flex; }
+  .tier + .tier { border-top: 2px solid #000; }
+
+  .tier-label {
+    width: 90px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    color: #111;
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---------- Zones qui contiennent des éléments (tiers + pool) ---------- */
+  .items-zone {
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;          /* les éléments passent à la ligne */
+    align-content: flex-start;
+    gap: 6px;
+    padding: 8px;
+    min-height: 56px;
+    background: #2b2b2b;
+  }
+  #pool { border: 2px solid #000; }
+  #pool:empty::before { content: "Tous les éléments sont classés."; color: #888; font-size: 14px; align-self: center; }
+  .items-zone.drag-over { outline: 2px dashed #888; outline-offset: -4px; }
+
+  /* ---------- Éléments ---------- */
+  .chip {
+    padding: 6px 10px;
+    background: #f2f2f2;
+    color: #111;
+    border: 1px solid #000;
+    font-size: 14px;
+    cursor: grab;
+    user-select: none;
+    overflow-wrap: anywhere;
+  }
+  .chip.dragging { opacity: 0.4; }
+  /* Barre bleue = endroit où l'élément sera déposé (box-shadow : ne décale rien) */
+  .chip.insert-before { box-shadow: -5px 0 0 0 #4da3ff; }
+  .chip.insert-after  { box-shadow:  5px 0 0 0 #4da3ff; }
+
+  /* ---------- Gestion des catégories ---------- */
+  .category-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .swatch { width: 18px; height: 28px; border: 1px solid #000; flex-shrink: 0; }
+  .category-row input { flex: 0 1 200px; min-width: 0; }
+
+  button, input[type="text"] {
+    padding: 5px 9px;
+    font-size: 14px;
+    background: #333;
+    color: #eee;
+    border: 1px solid #666;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { background: #444; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  @media (max-width: 600px) {
+    .tier-label { width: 60px; font-size: 16px; }
+  }
+</style>
+</head>
+
+<body>
+<div class="page">
+
+  <h1 id="title">MA TIER LIST</h1>
+
+  <!-- Zone de message : erreurs de chargement, avertissements -->
+  <div id="message" hidden>
+    <p id="message-text"></p>
+    <div id="message-help" hidden>
+      <p><strong>Solution 1 (la plus simple) :</strong> choisissez vous-même le fichier
+        (à refaire à chaque rechargement de la page) :
+        <input type="file" id="file-input" accept=".json,application/json"></p>
+      <p><strong>Solution 2 :</strong> lancez un mini serveur dans le dossier du projet :
+        <code>python3 -m http.server</code> (sous Windows : <code>py -m http.server</code>),
+        puis ouvrez <code>http://localhost:8000</code> dans le navigateur.</p>
+    </div>
+  </div>
+
+  <main id="board" hidden>
+    <div id="tiers"></div>
+
+    <section>
+      <h2>ÉLÉMENTS À CLASSER</h2>
+      <div id="pool" class="items-zone"></div>
+    </section>
+
+    <section>
+      <h2>CATÉGORIES</h2>
+      <div id="category-list"></div>
+      <button id="add-category">+ Ajouter une catégorie</button>
+    </section>
+  </main>
+
+</div>
+
+<script>
+  // ============================================================
+  //  CONSTANTES
+  // ============================================================
+  const DEFAULT_TIERS = ["S", "A", "B", "C", "D", "F"];
+
+  // Couleurs du rouge au gris/bleu. Une catégorie reçoit sa couleur selon sa POSITION
+  // (pas selon son nom) : ça marche donc avec n'importe quels noms et n'importe quel nombre de catégories.
+  const COLOR_STOPS = ["#ff7f7f", "#ffbf7f", "#ffdf7f", "#bfe58a", "#8fc4f0", "#a7b4c8"];
+
+  const MAX_ITEM_LENGTH = 29;   // « moins de 30 caractères »
+
+  // ============================================================
+  //  ÉTAT (tout est ici ; l'affichage est reconstruit à partir de ces données)
+  // ============================================================
+  let tiers = [];            // [{ id: "t1", name: "S", items: ["Minecraft", ...] }, ...]
+  let pool = [];             // éléments pas encore classés
+  let nextTierId = 1;
+  let draggedItem = null;    // texte de l'élément en cours de glissement
+  let loadFailedOnFileProtocol = false;
+
+  // ============================================================
+  //  RACCOURCIS DOM
+  // ============================================================
+  const $ = id => document.getElementById(id);
+  const titleEl = $("title");
+  const messageBox = $("message");
+  const messageText = $("message-text");
+  const messageHelp = $("message-help");
+  const boardEl = $("board");
+  const tiersEl = $("tiers");
+  const poolEl = $("pool");
+  const categoryListEl = $("category-list");
+
+  // ============================================================
+  //  CHARGEMENT DE data.json
+  // ============================================================
+  async function loadData() {
+    let text;
+    try {
+      const response = await fetch("data.json");
+      if (!response.ok) throw new Error("code HTTP " + response.status);
+      text = await response.text();
+    } catch (error) {
+      loadFailedOnFileProtocol = true;
+      showMessage(
+        "Impossible de charger data.json (" + error.message + ").\n" +
+        "Quand index.html est ouvert directement depuis le disque (adresse en file://), la plupart " +
+        "des navigateurs interdisent à une page de lire un autre fichier, même placé juste à côté : " +
+        "c'est une règle de sécurité. Vérifiez aussi que data.json est bien dans le même dossier.",
+        "error"
+      );
+      return;
+    }
+    startFromJson(text);
+  }
+
+  // Lit le texte JSON, le vérifie, puis (ré)initialise la Tier List
+  function startFromJson(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      showMessage("Le fichier JSON est invalide : " + error.message + "\nCorrigez-le puis rechargez la page.", "error");
+      return;
+    }
+
+    if (!data || !Array.isArray(data.items)) {
+      showMessage('Le JSON doit contenir une liste "items", par exemple : {"items": ["Minecraft", "Hades"]}', "error");
+      return;
+    }
+
+    const { items, warnings } = cleanItems(data.items);
+
+    // Titre optionnel
+    const title = (typeof data.title === "string" && data.title.trim()) ? data.title.trim() : "MA TIER LIST";
+    titleEl.textContent = title;
+    document.title = title;
+
+    // État initial : catégories par défaut, tous les éléments dans la zone « à classer »
+    pool = items;
+    tiers = DEFAULT_TIERS.map(name => ({ id: "t" + nextTierId++, name: name, items: [] }));
+    boardEl.hidden = false;
+    render();
+
+    if (items.length === 0) {
+      showMessage("La liste d'éléments est vide : ajoutez des textes dans la propriété \"items\" de data.json.", "warning");
+    } else if (warnings.length > 0) {
+      showMessage("Éléments ignorés dans data.json :\n" + warnings.join("\n"), "warning");
+    } else {
+      messageBox.hidden = true;
+    }
+  }
+
+  // Ne garde que les textes valides, courts et sans doublon
+  function cleanItems(rawItems) {
+    const items = [];
+    const warnings = [];
+    rawItems.forEach((raw, index) => {
+      if (typeof raw !== "string" || raw.trim() === "") {
+        warnings.push("- Élément n°" + (index + 1) + " : texte manquant ou vide");
+        return;
+      }
+      const name = raw.trim();
+      if (name.length > MAX_ITEM_LENGTH) {
+        warnings.push("- « " + name + " » : 30 caractères ou plus");
+      } else if (items.includes(name)) {
+        warnings.push("- « " + name + " » : doublon");
+      } else {
+        items.push(name);
+      }
+    });
+    return { items, warnings };
+  }
+
+  function showMessage(text, kind) {
+    messageText.textContent = text;
+    messageBox.className = kind;
+    messageHelp.hidden = !(kind === "error" && loadFailedOnFileProtocol);
+    messageBox.hidden = false;
+  }
+
+  // Solution 1 : l'utilisateur choisit data.json à la main (fonctionne même en file://)
+  $("file-input").addEventListener("change", async event => {
+    const file = event.target.files[0];
+    if (file) startFromJson(await file.text());
+    event.target.value = "";
+  });
+
+  // ============================================================
+  //  AFFICHAGE
+  // ============================================================
+  function render() {
+    renderTiers();
+    fillZone(poolEl, pool);
+    renderCategoryManager();
+  }
+
+  function colorFor(index) {
+    const last = tiers.length - 1;
+    const stop = last === 0 ? 0 : Math.round(index * (COLOR_STOPS.length - 1) / last);
+    return COLOR_STOPS[stop];
+  }
+
+  function createChip(itemName) {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.draggable = true;
+    chip.dataset.item = itemName;
+    chip.textContent = itemName;
+    return chip;
+  }
+
+  function fillZone(zone, items) {
+    zone.innerHTML = "";
+    items.forEach(itemName => zone.append(createChip(itemName)));
+  }
+
+  function renderTiers() {
+    tiersEl.innerHTML = "";
+    tiers.forEach((tier, index) => {
+      const row = document.createElement("div");
+      row.className = "tier";
+
+      const label = document.createElement("div");
+      label.className = "tier-label";
+      label.textContent = tier.name;
+      label.style.background = colorFor(index);
+
+      const zone = document.createElement("div");
+      zone.className = "items-zone";
+      zone.dataset.tierId = tier.id;
+      fillZone(zone, tier.items);
+
+      row.append(label, zone);
+      tiersEl.append(row);
+    });
+    if (tiers.length === 0) {
+      tiersEl.innerHTML = '<div class="items-zone">Aucune catégorie : ajoutez-en une ci-dessous.</div>';
+    }
+  }
+
+  // ============================================================
+  //  GESTION DES CATÉGORIES
+  // ============================================================
+  function renderCategoryManager() {
+    categoryListEl.innerHTML = "";
+    tiers.forEach((tier, index) => {
+      const row = document.createElement("div");
+      row.className = "category-row";
+
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = colorFor(index);
+
+      // Renommer : on modifie le champ puis Entrée (ou on clique ailleurs)
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = tier.name;
+      input.maxLength = 20;
+      input.title = "Modifier le nom, puis Entrée";
+      input.addEventListener("change", () => {
+        tier.name = input.value.trim() || tier.name;   // un nom vide est refusé
+        input.value = tier.name;
+        renderTiers();
+      });
+
+      const upButton = makeButton("▲", () => moveTier(index, -1), index === 0);
+      const downButton = makeButton("▼", () => moveTier(index, +1), index === tiers.length - 1);
+      const deleteButton = makeButton("Supprimer", () => deleteTier(index), false);
+
+      row.append(swatch, input, upButton, downButton, deleteButton);
+      categoryListEl.append(row);
+    });
+  }
+
+  function makeButton(text, onClick, disabled) {
+    const button = document.createElement("button");
+    button.textContent = text;
+    button.disabled = disabled;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  $("add-category").addEventListener("click", () => {
+    tiers.push({ id: "t" + nextTierId++, name: "Nouvelle", items: [] });
+    render();
+    categoryListEl.lastElementChild.querySelector("input").select();   // prêt à taper le nom
+  });
+
+  function moveTier(index, direction) {
+    const target = index + direction;
+    [tiers[index], tiers[target]] = [tiers[target], tiers[index]];
+    render();
+  }
+
+  function deleteTier(index) {
+    pool.push(...tiers[index].items);   // les éléments retournent dans « à classer », rien n'est perdu
+    tiers.splice(index, 1);
+    render();
+  }
+
+  // ============================================================
+  //  DRAG & DROP
+  // ============================================================
+  // Les écouteurs sont posés une seule fois sur #board (délégation d'événements) :
+  // ils continuent donc de fonctionner même quand render() reconstruit tous les éléments.
+
+  boardEl.addEventListener("dragstart", event => {
+    const chip = event.target.closest(".chip");
+    if (!chip) return;
+    draggedItem = chip.dataset.item;
+    event.dataTransfer.setData("text/plain", draggedItem);   // requis par Firefox
+    event.dataTransfer.effectAllowed = "move";
+    setTimeout(() => chip.classList.add("dragging"), 0);     // après la création de l'image fantôme
+  });
+
+  boardEl.addEventListener("dragover", event => {
+    const zone = event.target.closest(".items-zone");
+    if (!zone || draggedItem === null) return;
+    event.preventDefault();                                  // autorise le dépôt ici
+    event.dataTransfer.dropEffect = "move";
+
+    clearIndicators();
+    zone.classList.add("drag-over");
+    showInsertIndicator(zone, getDropIndex(zone, event.clientX, event.clientY));
+  });
+
+  boardEl.addEventListener("drop", event => {
+    const zone = event.target.closest(".items-zone");
+    if (!zone || draggedItem === null) return;
+    event.preventDefault();
+    moveItem(draggedItem, zone, getDropIndex(zone, event.clientX, event.clientY));
+    endDrag();   // appelé ici aussi : l'élément d'origine a été reconstruit, son "dragend" peut ne pas arriver
+  });
+
+  boardEl.addEventListener("dragend", endDrag);
+
+  function endDrag() {
+    draggedItem = null;
+    clearIndicators();
+    document.querySelectorAll(".dragging").forEach(chip => chip.classList.remove("dragging"));
+  }
+
+  // Éléments visibles d'une zone, sans celui qu'on est en train de déplacer
+  function otherChips(zone) {
+    return [...zone.querySelectorAll(".chip")].filter(chip => chip.dataset.item !== draggedItem);
+  }
+
+  // Position (0, 1, 2...) où l'élément sera inséré, d'après la souris
+  function getDropIndex(zone, mouseX, mouseY) {
+    const chips = otherChips(zone);
+    for (let i = 0; i < chips.length; i++) {
+      const rect = chips[i].getBoundingClientRect();
+      const isOnPreviousRow = mouseY < rect.top;
+      const isOnSameRowBefore = mouseY <= rect.bottom && mouseX < rect.left + rect.width / 2;
+      if (isOnPreviousRow || isOnSameRowBefore) return i;
+    }
+    return chips.length;   // après le dernier
+  }
+
+  function showInsertIndicator(zone, index) {
+    const chips = otherChips(zone);
+    if (chips.length === 0) return;   // zone vide : le cadre pointillé suffit
+    if (index < chips.length) chips[index].classList.add("insert-before");
+    else chips[chips.length - 1].classList.add("insert-after");
+  }
+
+  function clearIndicators() {
+    document.querySelectorAll(".insert-before, .insert-after, .drag-over").forEach(el => {
+      el.classList.remove("insert-before", "insert-after", "drag-over");
+    });
+  }
+
+  function getListOfZone(zone) {
+    if (zone.id === "pool") return pool;
+    return tiers.find(tier => tier.id === zone.dataset.tierId).items;
+  }
+
+  function moveItem(itemName, targetZone, index) {
+    // 1) on retire l'élément de partout (garantit qu'il n'existe qu'à un seul endroit)
+    [pool, ...tiers.map(tier => tier.items)].forEach(list => {
+      const position = list.indexOf(itemName);
+      if (position !== -1) list.splice(position, 1);
+    });
+    // 2) on l'insère à la position voulue
+    getListOfZone(targetZone).splice(index, 0, itemName);
+    render();
+  }
+
+  // ============================================================
+  //  DÉMARRAGE
+  // ============================================================
+  loadData();
+</script>
+</body>
+</html>
